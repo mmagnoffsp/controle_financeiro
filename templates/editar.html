@@ -1,0 +1,41 @@
+﻿<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Editar Lançamento</title>
+    <style>
+        body { font-family: Arial; max-width: 800px; margin: 0 auto; padding: 20px; }
+        form { background: #f5f5f5; padding: 20px; border-radius: 8px; }
+        input, select, button { padding: 8px; margin: 5px; }
+        button { background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>✏️ Editar Lançamento</h1>
+    <form method="POST">
+        <label><input type="radio" name="tipo" value="Entrada" {{ 'checked' if lancamento[1] == 'Entrada' else '' }} onchange="atualizarCategorias()"> Entrada</label>
+        <label><input type="radio" name="tipo" value="Saída" {{ 'checked' if lancamento[1] == 'Saída' else '' }} onchange="atualizarCategorias()"> Saída</label><br><br>
+        <select name="categoria" id="categoria">
+            {% for cat in categorias_entrada + categorias_saida %}
+                <option value="{{ cat }}" {{ 'selected' if lancamento[2] == cat else '' }}>{{ cat }}</option>
+            {% endfor %}
+        </select>
+        Valor: <input type="number" name="valor" step="0.01" value="{{ lancamento[3] }}" required>
+        Data: <input type="date" name="data" value="{{ lancamento[4] }}" required>
+        Descrição: <input type="text" name="descricao" value="{{ lancamento[5] or '' }}"><br><br>
+        <button type="submit">Salvar Alterações</button>
+        <a href="/"><button type="button">Cancelar</button></a>
+    </form>
+<script>
+const entradas = {{ categorias_entrada | tojson }};
+const saidas = {{ categorias_saida | tojson }};
+function atualizarCategorias() {
+    const tipo = document.querySelector('input[name="tipo"]:checked').value;
+    const sel = document.getElementById('categoria');
+    sel.innerHTML = '';
+    const lista = tipo === 'Entrada' ? entradas : saidas;
+    lista.forEach(cat => { const opt = document.createElement('option'); opt.value = cat; opt.textContent = cat; sel.appendChild(opt); });
+}
+</script>
+</body>
+</html>

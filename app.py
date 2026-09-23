@@ -1,297 +1,302 @@
-import tkinter as tk
-from tkinter import ttk, messagebox
-from banco import calcular_total_receitas, calcular_total_despesas, cadastrar_receita, cadastrar_despesa, listar_receitas, listar_despesas
-from relatorios import exportar_pdf, exportar_relatorio_categoria
+# ==================================================
+# CONTROLE FINANCEIRO — BALANCETE PATRIMONIAL
+# Versão Final: Abre Navegador Automaticamente
+# ==================================================
+from flask import Flask, render_template, request, redirect, url_for, make_response, flash
+import sqlite3
+from fpdf import FPDF
+from datetime import datetime
+import webbrowser
+import threading
+import time
 
-root = tk.Tk()
-root.title("CONTROLE FINANCEIRO")
-root.geometry("950x900")
-root.configure(bg="#f0f4f8")
+# ==================================================
+# INICIALIZAÇÃO DO APLICATIVO
+# ==================================================
+app = Flask(__name__)
+app.secret_key = 'chave_secreta_controle_financeiro_2026'
 
-mes_atual = tk.StringVar(value="Setembro")
-ano_atual = tk.StringVar(value="2026")
-ano_relatorio = tk.StringVar(value="2026")
+# ==================================================
+# BANCO DE DADOS
+# ==================================================
+def init_db():
+    try:
+        conn = sqlite3.connect('financeiro.db')
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS lancamentos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tipo TEXT NOT NULL,
+                categoria TEXT NOT NULL,
+                valor REAL NOT NULL CHECK (valor > 0),
+                data TEXT NOT NULL,
+                descricao TEXT DEFAULT '',
+                usuario TEXT DEFAULT 'principal',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        print("✅ Banco de dados inicializado com sucesso")
+    except Exception as erro:
+        print(f"❌ Erro ao inicializar banco: {erro}")
 
-MESES = ["Janeiro","Fevereiro","Marco","Abril","Maio","Junho",
-         "Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"]
+init_db()
 
-COR_FUNDO = "#f0f4f8"
-COR_CABECALHO = "#2c3e50"
-COR_RECEITAS = "#27ae60"
-COR_DESPESAS = "#e74c3c"
-COR_SALDO = "#3498db"
-COR_DESTAQUE = "#d35400"
-COR_RELATORIO = "#8e44ad"
+# ==================================================
+# CATEGORIAS COMPLETAS
+# ==================================================
+CATEGORIAS_ENTRADA = [
+    "Salário",
+    "Pagamento Recebido",
+    "Adiantamento Vale Recebido",
+    "13º Salário - 1ª Parcela",
+    "13º Salário - 2ª Parcela",
+    "Férias",
+    "Pagamento antes das Férias",
+    "Pagamento 10 Dias Trabalhados",
+    "Vale após Férias",
+    "Reserva Caixa",
+    "Reserva Caixa — Poupança Santander"
+]
 
-def atualizar_dashboard():
-    m = mes_atual.get()
-    a = ano_atual.get()
-    total_rec = calcular_total_receitas(m, a)
-    total_des = calcular_total_despesas(m, a)
-    saldo = total_rec - total_des
-    
-    lbl_rec_valor.config(text=f"R$ {total_rec:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
-    lbl_des_valor.config(text=f"R$ {total_des:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
-    lbl_saldo_valor.config(text=f"R$ {saldo:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'))
-    lbl_saldo_valor.config(fg="#27ae60" if saldo >= 0 else "#e74c3c")
-    carregar_lancamentos(m, a)
+CATEGORIAS_SAIDA = [
+    "Despesas no Pagamento",
+    "Despesas no Vale",
+    "Despesas nas Férias",
+    "Despesas na 1ª Parcela do 13º Salário",
+    "Despesas na 2ª Parcela do 13º Salário",
+    "Despesas após Férias",
+    "Despesas no Pagamento Recebido antes das Férias",
+    "Despesas no Pagamento Recebido após as Férias",
+    "Despesas no Vale Recebido após Férias",
+    "Baixa de Reserva Caixa",
+    "Baixa Reserva Caixa — Poupança Santander"
+]
 
-def carregar_lancamentos(m, a):
-    for item in tree.get_children():
-        tree.delete(item)
-    for r in listar_receitas(m, a):
-        total_r = sum(r[3:]) if len(r) > 3 else 0
-        tree.insert("", "end", values=(
-            "Receitas do mês",
-            f"R$ {total_r:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'),
-            "RECEITA"
-        ))
-    for d in listar_despesas(m, a):
-        tree.insert("", "end", values=(
-            d[3],
-            f"R$ {d[4]:.2f}".replace(',', 'X').replace('.', ',').replace('X', '.'),
-            "DESPESA"
-        ))
+# ==================================================
+# FUNÇÕES AUXILIARES
+# ==================================================
+def calcular_saldo_reserva():
+    try:
+        conn = sqlite3.connect('financeiro.db')
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT COALESCE(SUM(valor), 0) 
+            FROM lancamentos 
+            WHERE categoria IN ('Reserva Caixa', 'Reserva Caixa — Poupança Santander')
+        """)
+        total_entradas = cursor.fetchone()[0]
+        cursor.execute("""
+            SELECT COALESCE(SUM(valor), 0) 
+            FROM lancamentos 
+            WHERE categoria IN ('Baixa de Reserva Caixa', 'Baixa Reserva Caixa — Poupança Santander')
+        """)
+        total_baixas = cursor.fetchone()[0]
+        conn.close()
+        return round(total_entradas - total_baixas, 2)
+    except Exception as erro:
+        print(f"Erro no cálculo da reserva: {erro}")
+        return 0.00
 
-def janela_cadastrar_receita():
-    win = tk.Toplevel(root)
-    win.title("LANÇAR RECEITA")
-    win.geometry("750x520")  # Tamanho fixo — TUDO VISÍVEL!
-    win.configure(bg=COR_FUNDO)
-    
-    tk.Label(win, text=f"MÊS: {mes_atual.get()}  |  ANO: {ano_atual.get()}",
-             font=("Arial", 12, "bold"), bg=COR_FUNDO, fg=COR_CABECALHO).pack(pady=12)
 
-    # Variáveis para os valores
-    v_salario = tk.StringVar()
-    v_vale = tk.StringVar()
-    v_dec1 = tk.StringVar()
-    v_dec2 = tk.StringVar()
-    v_sal_antes = tk.StringVar()
-    v_ferias = tk.StringVar()
-    v_10dias = tk.StringVar()
-    v_vale_ferias = tk.StringVar()
+def calcular_saldos_gerais():
+    try:
+        conn = sqlite3.connect('financeiro.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT COALESCE(SUM(valor), 0) FROM lancamentos WHERE tipo = 'Entrada'")
+        total_entradas = round(cursor.fetchone()[0], 2)
+        cursor.execute("SELECT COALESCE(SUM(valor), 0) FROM lancamentos WHERE tipo = 'Saída'")
+        total_saidas = round(cursor.fetchone()[0], 2)
+        conn.close()
+        saldo_geral = round(total_entradas - total_saidas, 2)
+        return {
+            'entradas': total_entradas,
+            'saidas': total_saidas,
+            'saldo_geral': saldo_geral
+        }
+    except Exception as erro:
+        print(f"Erro no cálculo geral: {erro}")
+        return {'entradas': 0, 'saidas': 0, 'saldo_geral': 0}
 
-    # Função para criar linha com botão de seleção + campo valor
-    def criar_linha(container, texto, var_valor, cor_texto=COR_CABECALHO):
-        frame_linha = tk.Frame(container, bg=COR_FUNDO)
-        frame_linha.pack(fill="x", pady=5)
-        
-        # Botão seletor (apenas rótulo destacado)
-        lbl = tk.Label(frame_linha, text=texto, font=("Arial", 10, "bold"),
-                       bg=COR_FUNDO, fg=cor_texto, width=45, anchor="w")
-        lbl.pack(side="left", padx=5)
-        
-        tk.Label(frame_linha, text="R$", bg=COR_FUNDO, font=("Arial", 10)).pack(side="left")
-        ent = tk.Entry(frame_linha, textvariable=var_valor, width=18, font=("Arial", 11))
-        ent.pack(side="left", padx=5)
-        return ent
-
-    # Conteúdo organizado em 2 colunas para CABER TUDO!
-    esquerda = tk.Frame(win, bg=COR_FUNDO)
-    direita = tk.Frame(win, bg=COR_FUNDO)
-    esquerda.pack(side="left", fill="both", expand=True, padx=15, pady=5)
-    direita.pack(side="left", fill="both", expand=True, padx=15, pady=5)
-
-    tk.Label(esquerda, text="💵 VALORES — PARTE 1", font=("Arial", 11, "bold"),
-             bg=COR_FUNDO, fg=COR_RECEITAS).pack(pady=(0,8))
-    
-    criar_linha(esquerda, "Salário Recebido", v_salario)
-    criar_linha(esquerda, "Adiantamento Vale", v_vale)
-    criar_linha(esquerda, "13º Salário — 1ª Parcela", v_dec1)
-    criar_linha(esquerda, "13º Salário — 2ª Parcela", v_dec2)
-
-    tk.Label(direita, text="🏖️ VALORES — PARTE 2", font=("Arial", 11, "bold"),
-             bg=COR_FUNDO, fg=COR_DESTAQUE).pack(pady=(0,8))
-    
-    criar_linha(direita, "Salário ANTES das Férias", v_sal_antes)
-    criar_linha(direita, "Férias Recebidas", v_ferias)
-    
-    # ⭐ DESTAQUE — SEMPRE VISÍVEL!
-    criar_linha(direita, "⭐ 10 DIAS TRABALHADOS DAS FÉRIAS", v_10dias, COR_DESTAQUE)
-    
-    criar_linha(direita, "Vale após as Férias", v_vale_ferias)
-
-    def converter(val):
-        t = val.get().strip()
-        return float(t.replace(',', '.')) if t else 0.0
-
-    def salvar():
-        cadastrar_receita(
-            mes_atual.get(), ano_atual.get(),
-            converter(v_salario), converter(v_vale),
-            converter(v_dec1), converter(v_dec2),
-            converter(v_sal_antes), converter(v_ferias),
-            converter(v_10dias), converter(v_vale_ferias)
+# ==================================================
+# ROTAS
+# ==================================================
+@app.route('/')
+def index():
+    try:
+        conn = sqlite3.connect('financeiro.db')
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, tipo, categoria, valor, data, descricao 
+            FROM lancamentos 
+            ORDER BY data DESC, id DESC
+        """)
+        lancamentos = cursor.fetchall()
+        conn.close()
+        saldo_reserva = calcular_saldo_reserva()
+        saldos_gerais = calcular_saldos_gerais()
+        return render_template(
+            'index.html',
+            lancamentos=lancamentos,
+            categorias_entrada=CATEGORIAS_ENTRADA,
+            categorias_saida=CATEGORIAS_SAIDA,
+            saldo_reserva=saldo_reserva,
+            saldos_gerais=saldos_gerais
         )
-        messagebox.showinfo("SUCESSO ✅", "Valores salvos com sucesso!")
-        atualizar_dashboard()
-        win.destroy()
+    except Exception as erro:
+        return f"Erro ao carregar página inicial: {erro}"
 
-    tk.Button(win, text="💾 SALVAR LANÇAMENTO", command=salvar,
-              bg=COR_RECEITAS, fg="white", font=("Arial", 12, "bold"),
-              padx=50, pady=12).pack(pady=20)
 
-def janela_cadastrar_despesa():
-    win = tk.Toplevel(root)
-    win.title("LANÇAR DESPESA")
-    win.geometry("480x320")
-    win.configure(bg=COR_FUNDO)
+@app.route('/adicionar', methods=['POST'])
+def adicionar():
+    try:
+        tipo = request.form.get('tipo', '').strip()
+        categoria = request.form.get('categoria', '').strip()
+        valor = float(request.form.get('valor', 0))
+        data = request.form.get('data', '').strip()
+        descricao = request.form.get('descricao', 'Sem observação').strip()
+        if not all([tipo, categoria, valor, data]):
+            flash("Preencha todos os campos obrigatórios!", "erro")
+            return redirect(url_for('index'))
+        if valor <= 0:
+            flash("O valor deve ser maior que zero!", "erro")
+            return redirect(url_for('index'))
+        conn = sqlite3.connect('financeiro.db')
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO lancamentos (tipo, categoria, valor, data, descricao)
+            VALUES (?, ?, ?, ?, ?)
+        """, (tipo, categoria, valor, data, descricao))
+        conn.commit()
+        conn.close()
+        flash(f"✅ Lançamento registrado: {categoria} — R$ {valor:.2f}", "sucesso")
+        return redirect(url_for('index'))
+    except Exception as erro:
+        flash(f"❌ Erro ao registrar: {erro}", "erro")
+        return redirect(url_for('index'))
+
+
+@app.route('/excluir/<int:lancamento_id>')
+def excluir(lancamento_id):
+    try:
+        conn = sqlite3.connect('financeiro.db')
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM lancamentos WHERE id = ?", (lancamento_id,))
+        conn.commit()
+        conn.close()
+        flash("🗑️ Lançamento excluído com sucesso!", "sucesso")
+        return redirect(url_for('index'))
+    except Exception as erro:
+        flash(f"❌ Erro ao excluir: {erro}", "erro")
+        return redirect(url_for('index'))
+
+
+@app.route('/editar/<int:lancamento_id>', methods=['GET', 'POST'])
+def editar(lancamento_id):
+    conn = sqlite3.connect('financeiro.db')
+    cursor = conn.cursor()
+    if request.method == 'POST':
+        tipo = request.form.get('tipo', '')
+        categoria = request.form.get('categoria', '')
+        valor = float(request.form.get('valor', 0))
+        data = request.form.get('data', '')
+        descricao = request.form.get('descricao', '')
+        cursor.execute("""
+            UPDATE lancamentos 
+            SET tipo = ?, categoria = ?, valor = ?, data = ?, descricao = ?
+            WHERE id = ?
+        """, (tipo, categoria, valor, data, descricao, lancamento_id))
+        conn.commit()
+        conn.close()
+        flash("✏️ Lançamento atualizado!", "sucesso")
+        return redirect(url_for('index'))
+    cursor.execute("""
+        SELECT id, tipo, categoria, valor, data, descricao 
+        FROM lancamentos WHERE id = ?
+    """, (lancamento_id,))
+    lancamento = cursor.fetchone()
+    conn.close()
+    return render_template(
+        'editar.html',
+        lancamento=lancamento,
+        categorias_entrada=CATEGORIAS_ENTRADA,
+        categorias_saida=CATEGORIAS_SAIDA
+    )
+
+
+@app.route('/relatorio-pdf')
+def relatorio_pdf():
+    try:
+        conn = sqlite3.connect('financeiro.db')
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT tipo, categoria, valor, data, descricao 
+            FROM lancamentos ORDER BY data, id
+        """)
+        lancamentos = cursor.fetchall()
+        conn.close()
+        saldo_reserva = calcular_saldo_reserva()
+        saldos = calcular_saldos_gerais()
+        
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Arial", 'B', 18)
+        pdf.cell(0, 12, "CONTROLE FINANCEIRO — BALANCETE", ln=True, align='C')
+        pdf.set_font("Arial", size=10)
+        pdf.cell(0, 8, f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='C')
+        pdf.ln(5)
+        
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 10, "RESUMO GERAL", ln=True)
+        pdf.set_font("Arial", size=11)
+        pdf.cell(95, 8, f"Total de Entradas:  R$ {saldos['entradas']:,.2f}", border=1)
+        pdf.cell(95, 8, f"Total de Saídas:     R$ {saldos['saidas']:,.2f}", border=1, ln=True)
+        pdf.cell(95, 8, f"Saldo Geral:         R$ {saldos['saldo_geral']:,.2f}", border=1)
+        pdf.cell(95, 8, f"Saldo Reserva:       R$ {saldo_reserva:,.2f}", border=1, ln=True)
+        pdf.ln(8)
+        
+        pdf.set_font("Arial", 'B', 10)
+        pdf.cell(28, 8, "Data", 1, 0, 'C')
+        pdf.cell(25, 8, "Tipo", 1, 0, 'C')
+        pdf.cell(55, 8, "Categoria", 1, 0, 'C')
+        pdf.cell(30, 8, "Valor R$", 1, 0, 'C')
+        pdf.cell(62, 8, "Descrição", 1, 1, 'C')
+        
+        pdf.set_font("Arial", size=9)
+        for lanc in lancamentos:
+            cor = (0, 128, 0) if lanc[0] == 'Entrada' else (200, 0, 0)
+            pdf.set_text_color(*cor)
+            pdf.cell(28, 7, lanc[3], 1)
+            pdf.cell(25, 7, lanc[0], 1)
+            pdf.cell(55, 7, lanc[1], 1)
+            pdf.cell(30, 7, f"{lanc[2]:,.2f}", 1, 0, 'R')
+            pdf.cell(62, 7, lanc[4] or '-', 1, 1)
+        
+        pdf.set_text_color(0, 0, 0)
+        arquivo_pdf = pdf.output(dest='S').encode('latin-1')
+        resposta = make_response(arquivo_pdf)
+        resposta.headers['Content-Type'] = 'application/pdf'
+        resposta.headers['Content-Disposition'] = f'attachment; filename=balancete_{datetime.now().strftime("%Y%m%d")}.pdf'
+        return resposta
+    except Exception as erro:
+        return f"Erro ao gerar PDF: {erro}"
+
+# ==================================================
+# ABRIR NAVEGADOR AUTOMATICAMENTE
+# ==================================================
+def abrir_navegador():
+    time.sleep(1.5)
+    webbrowser.open("http://127.0.0.1:5000")
+
+# ==================================================
+# EXECUÇÃO
+# ==================================================
+if __name__ == '__main__':
+    print("="*50)
+    print("🚀 Iniciando Controle Financeiro...")
+    print("📍 Abrindo: http://127.0.0.1:5000")
+    print("="*50)
     
-    tk.Label(win, text=f"MÊS: {mes_atual.get()}  |  ANO: {ano_atual.get()}",
-             font=("Arial", 11, "bold"), bg=COR_FUNDO, fg=COR_CABECALHO).pack(pady=15)
-    
-    tk.Label(win, text="Descrição da despesa:", bg=COR_FUNDO, font=("Arial", 10)).pack(anchor="w", padx=30)
-    desc = tk.Entry(win, width=50, font=("Arial", 11))
-    desc.pack(pady=5, padx=30)
-    
-    tk.Label(win, text="Valor R$:", bg=COR_FUNDO, font=("Arial", 10)).pack(anchor="w", padx=30, pady=(15,0))
-    valor = tk.Entry(win, width=30, font=("Arial", 11))
-    valor.pack(pady=5, padx=30)
-    
-    def salvar():
-        d = desc.get().strip()
-        v = float(valor.get().replace(',', '.'))
-        cadastrar_despesa(mes_atual.get(), ano_atual.get(), d, v)
-        messagebox.showinfo("SUCESSO ✅", "Despesa salva!")
-        atualizar_dashboard()
-        win.destroy()
-    
-    tk.Button(win, text="💾 SALVAR DESPESA", command=salvar,
-              bg=COR_DESPESAS, fg="white", font=("Arial", 11, "bold"),
-              padx=40, pady=10).pack(pady=20)
-
-def gerar_pdf_mensal():
-    exportar_pdf(mes_atual.get(), ano_atual.get())
-    messagebox.showinfo("SUCESSO ✅", "PDF do mês gerado na pasta!")
-
-def gerar_relatorio(coluna, titulo):
-    ano = ano_relatorio.get().strip()
-    if not ano:
-        messagebox.showwarning("Aviso ⚠️", "Digite o ano!")
-        return
-    arquivo = exportar_relatorio_categoria(ano, coluna, titulo)
-    messagebox.showinfo("SUCESSO ✅", f"Relatório gerado!\n{arquivo}")
-
-# ========== CABEÇALHO ==========
-topo = tk.Frame(root, bg=COR_CABECALHO, height=80)
-topo.pack(fill="x")
-topo.pack_propagate(False)
-tk.Label(topo, text="CONTROLE FINANCEIRO", font=("Arial", 20, "bold"),
-         bg=COR_CABECALHO, fg="white").pack(side="left", padx=30, pady=20)
-
-seletor = tk.Frame(topo, bg=COR_CABECALHO)
-seletor.pack(side="right", padx=20)
-ttk.Combobox(seletor, textvariable=mes_atual, values=MESES,
-             width=12, state="readonly").pack(side="left", padx=5)
-tk.Entry(seletor, textvariable=ano_atual, width=8, font=("Arial", 11)).pack(side="left", padx=5)
-tk.Button(seletor, text="ATUALIZAR", command=atualizar_dashboard,
-          bg="#f39c12", fg="white", font=("Arial", 9, "bold")).pack(side="left", padx=10)
-
-# ========== CARDS ==========
-cards = tk.Frame(root, bg=COR_FUNDO)
-cards.pack(fill="x", padx=20, pady=15)
-
-card_rec = tk.Frame(cards, bg=COR_RECEITAS, padx=25, pady=15)
-card_rec.pack(side="left", expand=True, fill="both", padx=10)
-tk.Label(card_rec, text="TOTAL RECEITAS", font=("Arial", 12, "bold"), bg=COR_RECEITAS, fg="white").pack()
-lbl_rec_valor = tk.Label(card_rec, text="R$ 0,00", font=("Arial", 18, "bold"), bg=COR_RECEITAS, fg="white")
-lbl_rec_valor.pack()
-
-card_des = tk.Frame(cards, bg=COR_DESPESAS, padx=25, pady=15)
-card_des.pack(side="left", expand=True, fill="both", padx=10)
-tk.Label(card_des, text="TOTAL DESPESAS", font=("Arial", 12, "bold"), bg=COR_DESPESAS, fg="white").pack()
-lbl_des_valor = tk.Label(card_des, text="R$ 0,00", font=("Arial", 18, "bold"), bg=COR_DESPESAS, fg="white")
-lbl_des_valor.pack()
-
-card_sal = tk.Frame(cards, bg=COR_SALDO, padx=25, pady=15)
-card_sal.pack(side="left", expand=True, fill="both", padx=10)
-tk.Label(card_sal, text="SALDO FINAL", font=("Arial", 12, "bold"), bg=COR_SALDO, fg="white").pack()
-lbl_saldo_valor = tk.Label(card_sal, text="R$ 0,00", font=("Arial", 18, "bold"), bg=COR_SALDO, fg="white")
-lbl_saldo_valor.pack()
-
-# ========== BOTÕES PRINCIPAIS ==========
-botoes = tk.Frame(root, bg=COR_FUNDO)
-botoes.pack(fill="x", padx=20, pady=5)
-tk.Button(botoes, text="💰 LANÇAR RECEITAS", command=janela_cadastrar_receita,
-          bg=COR_RECEITAS, fg="white", font=("Arial", 11, "bold"), padx=20, pady=10).pack(side="left", padx=8)
-tk.Button(botoes, text="📉 LANÇAR DESPESAS", command=janela_cadastrar_despesa,
-          bg=COR_DESPESAS, fg="white", font=("Arial", 11, "bold"), padx=20, pady=10).pack(side="left", padx=8)
-tk.Button(botoes, text="📄 GERAR PDF DO MÊS", command=gerar_pdf_mensal,
-          bg="#9b59b6", fg="white", font=("Arial", 11, "bold"), padx=20, pady=10).pack(side="left", padx=8)
-
-# ========== RELATÓRIOS POR CATEGORIA — TODOS VISÍVEIS ==========
-frame_rel = tk.Frame(root, bg="#e8e4f0", padx=15, pady=15)
-frame_rel.pack(fill="x", padx=20, pady=15)
-
-tk.Label(frame_rel, text="📊 RELATÓRIOS POR CATEGORIA — Digite o Ano e clique no botão",
-         font=("Arial", 12, "bold"), bg="#e8e4f0", fg=COR_RELATORIO).pack(anchor="w", pady=(0,12))
-
-linha_ano = tk.Frame(frame_rel, bg="#e8e4f0")
-linha_ano.pack(anchor="w", pady=(0,12))
-tk.Label(linha_ano, text="Ano:", bg="#e8e4f0", font=("Arial", 11, "bold")).pack(side="left", padx=(0,10))
-tk.Entry(linha_ano, textvariable=ano_relatorio, width=15, font=("Arial", 12)).pack(side="left")
-
-botoes_rel = tk.Frame(frame_rel, bg="#e8e4f0")
-botoes_rel.pack(fill="x")
-
-estilo_normal = {"bg": COR_RELATORIO, "fg": "white", "font": ("Arial", 10, "bold"), "padx": 10, "pady": 10}
-estilo_destaque = {"bg": COR_DESTAQUE, "fg": "white", "font": ("Arial", 11, "bold"), "padx": 10, "pady": 12}
-
-# Coluna 1
-col1 = tk.Frame(botoes_rel, bg="#e8e4f0")
-col1.pack(side="left", fill="both", expand=True, padx=5)
-
-tk.Button(col1, text="💰 1 — SALÁRIO RECEBIDO",
-          command=lambda: gerar_relatorio("salario", "SALÁRIO RECEBIDO"),
-          **estilo_normal).pack(fill="x", pady=4)
-
-tk.Button(col1, text="💵 2 — ADIANTAMENTO VALE",
-          command=lambda: gerar_relatorio("vale", "ADIANTAMENTO VALE RECEBIDO"),
-          **estilo_normal).pack(fill="x", pady=4)
-
-tk.Button(col1, text="📄 3 — 13º SALÁRIO 1ª PARCELA",
-          command=lambda: gerar_relatorio("decimo1", "13º SALÁRIO — 1ª PARCELA"),
-          **estilo_normal).pack(fill="x", pady=4)
-
-tk.Button(col1, text="📄 4 — 13º SALÁRIO 2ª PARCELA",
-          command=lambda: gerar_relatorio("decimo2", "13º SALÁRIO — 2ª PARCELA"),
-          **estilo_normal).pack(fill="x", pady=4)
-
-# Coluna 2
-col2 = tk.Frame(botoes_rel, bg="#e8e4f0")
-col2.pack(side="left", fill="both", expand=True, padx=5)
-
-tk.Button(col2, text="🏖️ 5 — SALÁRIO ANTES DAS FÉRIAS",
-          command=lambda: gerar_relatorio("salario_antes_ferias", "SALÁRIO ANTES DAS FÉRIAS"),
-          **estilo_normal).pack(fill="x", pady=4)
-
-tk.Button(col2, text="🌴 6 — FÉRIAS RECEBIDAS",
-          command=lambda: gerar_relatorio("ferias", "FÉRIAS RECEBIDAS"),
-          **estilo_normal).pack(fill="x", pady=4)
-
-# ⭐ DESTAQUE — SEMPRE APARECE!
-tk.Button(col2, text="⭐ 7 — 10 DIAS TRABALHADOS DAS FÉRIAS ⭐",
-          command=lambda: gerar_relatorio("salario_10_dias_trabalhados_ferias", "SALÁRIO REFERENTE AOS 10 DIAS TRABALHADOS DAS FÉRIAS"),
-          **estilo_destaque).pack(fill="x", pady=6)
-
-tk.Button(col2, text="💳 8 — VALE APÓS AS FÉRIAS",
-          command=lambda: gerar_relatorio("vale_ferias", "VALE APÓS AS FÉRIAS"),
-          **estilo_normal).pack(fill="x", pady=4)
-
-# ========== TABELA ==========
-lista = tk.Frame(root, bg=COR_FUNDO)
-lista.pack(fill="both", expand=True, padx=20, pady=10)
-tk.Label(lista, text="LANÇAMENTOS DO MÊS", font=("Arial", 13, "bold"), bg=COR_FUNDO, fg=COR_CABECALHO).pack(anchor="w", pady=(0,10))
-
-tree = ttk.Treeview(lista, columns=("desc", "valor", "tipo"), show="headings", height=6)
-tree.heading("desc", text="Descrição")
-tree.heading("valor", text="Valor")
-tree.heading("tipo", text="Tipo")
-tree.column("desc", width=500)
-tree.column("valor", width=200)
-tree.column("tipo", width=150)
-tree.pack(fill="both", expand=True)
-
-atualizar_dashboard()
-root.mainloop()
+    threading.Thread(target=abrir_navegador, daemon=True).start()
+    app.run(debug=False)

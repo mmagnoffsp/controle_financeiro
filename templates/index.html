@@ -1,0 +1,84 @@
+﻿<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Controle Financeiro</title>
+    <style>
+        body { font-family: Arial; max-width: 1100px; margin: 0 auto; padding: 20px; }
+        .entrada { color: green; font-weight: bold; }
+        .saida { color: red; font-weight: bold; }
+        form { background: #f5f5f5; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        input, select, button { padding: 8px; margin: 5px; border-radius: 4px; border: 1px solid #ccc; }
+        button { cursor: pointer; background: #007bff; color: white; border: none; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 10px; border: 1px solid #ddd; text-align: left; }
+        th { background: #f0f0f0; }
+        .saldo-reserva { background: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; font-size: 1.1em; }
+        .saldo-geral { background: #fff3cd; padding: 15px; border-radius: 8px; margin-bottom: 20px; font-size: 1.1em; }
+        .btn-excluir { background: #dc3545; }
+        .btn-editar { background: #ffc107; color: #000; }
+        .btn-pdf { background: #28a745; float: right; }
+        .flash-sucesso { background: #d4edda; padding: 10px; border-radius: 4px; margin: 10px 0; color: #155724; }
+        .flash-erro { background: #f8d7da; padding: 10px; border-radius: 4px; margin: 10px 0; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h1>💰 Controle Financeiro</h1>
+    {% with mensagens = get_flashed_messages(with_categories=true) %}
+      {% if mensagens %}
+        {% for categoria, mensagem in mensagens %}
+          <p class="flash-{{ categoria }}">{{ mensagem }}</p>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    <div class="saldo-geral">
+        <strong>Total de Entradas:</strong> R$ {{ "%.2f"|format(saldos_gerais.entradas) }} |
+        <strong>Total de Saídas:</strong> R$ {{ "%.2f"|format(saldos_gerais.saidas) }} |
+        <strong>Saldo Geral:</strong> R$ {{ "%.2f"|format(saldos_gerais.saldo_geral) }}
+    </div>
+    <div class="saldo-reserva">
+        <strong>Saldo Reserva após Baixa: R$ {{ "%.2f"|format(saldo_reserva) }}</strong>
+    </div>
+    <h3>Adicionar Lançamento</h3>
+    <form action="/adicionar" method="POST">
+        <label><input type="radio" name="tipo" value="Entrada" checked onchange="atualizarCategorias()"> Entrada</label>
+        <label><input type="radio" name="tipo" value="Saída" onchange="atualizarCategorias()"> Saída</label><br><br>
+        <select name="categoria" id="categoria" required>
+            {% for cat in categorias_entrada %}<option value="{{ cat }}">{{ cat }}</option>{% endfor %}
+        </select>
+        Valor: <input type="number" name="valor" step="0.01" required>
+        Data: <input type="date" name="data" required>
+        Descrição: <input type="text" name="descricao" placeholder="Opcional">
+        <button type="submit">Adicionar</button>
+    </form>
+    <a href="/relatorio-pdf"><button class="btn-pdf">📄 Baixar Relatório PDF</button></a><br><br>
+    <h3>Histórico de Lançamentos</h3>
+    <table>
+        <tr><th>Data</th><th>Tipo</th><th>Categoria</th><th>Valor</th><th>Descrição</th><th>Ações</th></tr>
+        {% for l in lancamentos %}
+        <tr>
+            <td>{{ l[4] }}</td>
+            <td class="{{ 'entrada' if l[1] == 'Entrada' else 'saida' }}">{{ l[1] }}</td>
+            <td>{{ l[2] }}</td>
+            <td>R$ {{ "%.2f"|format(l[3]) }}</td>
+            <td>{{ l[5] or '-' }}</td>
+            <td>
+                <a href="/editar/{{ l[0] }}"><button class="btn-editar">Editar</button></a>
+                <a href="/excluir/{{ l[0] }}" onclick="return confirm('Confirma exclusão?')"><button class="btn-excluir">Excluir</button></a>
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+<script>
+const entradas = {{ categorias_entrada | tojson }};
+const saidas = {{ categorias_saida | tojson }};
+function atualizarCategorias() {
+    const tipo = document.querySelector('input[name="tipo"]:checked').value;
+    const sel = document.getElementById('categoria');
+    sel.innerHTML = '';
+    const lista = tipo === 'Entrada' ? entradas : saidas;
+    lista.forEach(cat => { const opt = document.createElement('option'); opt.value = cat; opt.textContent = cat; sel.appendChild(opt); });
+}
+</script>
+</body>
+</html>
